@@ -1,0 +1,81 @@
+version: 2.1
+jobs: 
+  checkmarx_scan:
+    docker:
+      - image: codehub-docker.jfrog.io/devops-checkmarx:latest
+        auth:
+          username: $ARTIFACTORY_USER
+          password: $ARTIFACTORY_TOKEN
+    working_directory: ~/app
+    steps:
+      - checkout
+      - setup_remote_docker
+      - run:
+          name: start the Checkmarx scan
+          command: |
+            /opt/CxConsolePlugin/runCxConsole.sh Scan -v \
+            -CxServer $CHECKMARX_SERVER \
+            -Cxuser $CHECKMARX_USER \
+            -CxPassword $CHECKMARX_PASSWORD \
+            -ProjectName "CxServer\Acc-IPReady\LEAP-FileHandlerService" \
+            -LocationType folder \
+            -LocationPath ~/app \
+            -Preset "Cognizant Default Preset" \
+            -executepackagedependency \
+            -ReportPDF ~/app/report/LEAP-FileHandlerService.pdf
+      - store_artifacts:
+          path: ~/app/report/LEAP-FileHandlerService.pdf
+
+  blackduck_scan:
+    docker:
+      - image: mcr.microsoft.com/dotnet/core/sdk
+    working_directory: ~/app
+    environment:
+      COMMIT_ID: $(echo $CIRCLE_SHA1 | cut -c1-7)
+    steps:
+      - checkout
+      - attach_workspace:
+            at: workspace
+      - run:
+          name: install dependencies
+          command: apt-get update && apt-get -y install default-jre
+      - run:
+          name: Start the Synopsys Detect scan
+          no_output_timeout: 60m
+          command: |
+            bash ./.circleci/detect.sh \
+            --blackduck.url=$BLACKDUCK_URL \
+            --blackduck.api.token=$BLACKDUCK_TOKEN \
+            --blackduck.timeout=3600 \
+            --detect.blackduck.signature.scanner.snippet.matching=SNIPPET_MATCHING \
+            --detect.detector.search.depth=2 \
+            --detect.npm.path=/usr/bin/npm \
+            --detect.npm.node.path=/usr/bin/node \
+            --detect.project.name="LEAP-FileHandlerService" \
+            --detect.project.version.name="ver.$CIRCLE_BUILD_NUM.$COMMIT_ID" \
+            --detect.default.project.version.scheme=timestamp \
+            --detect.default.project.version.timeformat='yyyy-MM-dd:HH:mm:ss.SSS' \
+            --detect.risk.report.pdf=true \
+            --detect.risk.report.pdf.path="~/app/report" \
+            --detect.report.timeout=4800
+      - store_artifacts:
+          path: ~/app/report
+workflows:
+  scan:
+    jobs:
+      - checkmarx_scan:
+          context: Codehub-Common
+          filters:
+            branches:
+              only:
+              - /sast\/.*/                 # follow branching conventions matching the regex 
+                                           # eg: sast/1, sast/prod 
+                                           # to run sast scan     
+      - blackduck_scan:
+          context: Codehub-Common
+          filters:
+            branches:
+              only:
+              - /oss\/.*/                   # follow branching conventions matching the regex 
+                                            # eg: oss/1, oss/prod  
+                                            # to run blackduck scan 
